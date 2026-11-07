@@ -102,6 +102,43 @@ function sha256(buffer: string): Buffer {
   return crypto.createHash('sha256').update(buffer).digest();
 }
 
+const MAX_REDIRECT_URIS = 10;
+const MAX_REDIRECT_URI_LENGTH = 2048;
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
+ * A redirect URI is acceptable if it is an absolute https URL, or an http URL
+ * pointing to a loopback address (native/CLI clients, RFC 8252). Fragments are
+ * forbidden (RFC 6749 §3.1.2).
+ */
+function isAcceptableRedirectUri(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_REDIRECT_URI_LENGTH) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.hash) return false;
+  if (url.username || url.password) return false;
+  if (url.protocol === "https:") return true;
+  if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return true;
+  return false;
+}
+
+/** Constant-time string comparison to avoid leaking information via timing. */
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export async function initOAuthStore() {
   await oauthStore.init();
 }
@@ -113,20 +150,43 @@ export function createOAuthRouter(config: OAuthConfig) {
     "/register",
     rateLimit({ maxRequests: 30, windowMs: 3600000 }),
     async (c) => {
-      const body = await c.req.json();
+      let body: any;
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: "invalid_client_metadata", error_description: "Request body must be valid JSON" }, 400);
+      }
+
+      const redirectUris = body?.redirect_uris;
+      if (
+        !Array.isArray(redirectUris) ||
+        redirectUris.length === 0 ||
+        redirectUris.length > MAX_REDIRECT_URIS ||
+        !redirectUris.every(isAcceptableRedirectUri)
+      ) {
+        logger.warn("OAuth client registration rejected: invalid redirect_uris");
+        return c.json({
+          error: "invalid_redirect_uri",
+          error_description: "redirect_uris must be a non-empty array of https URLs (or http loopback URLs)",
+        }, 400);
+      }
+
       const clientId = crypto.randomUUID();
 
       await oauthStore.registerClient(clientId, {
         clientId,
-        redirectUris: body.redirect_uris || [],
+        redirectUris,
       });
 
       logger.info("OAuth client registered");
 
       return c.json({
         client_id: clientId,
-        redirect_uris: body.redirect_uris || [],
-      });
+        redirect_uris: redirectUris,
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      }, 201);
     }
   );
 
@@ -146,9 +206,39 @@ export function createOAuthRouter(config: OAuthConfig) {
       return c.json({ error: "unsupported_response_type" }, 400);
     }
 
+    if (!clientId) {
+      logger.warn("OAuth authorization failed: missing client_id");
+      return c.json({ error: "invalid_request", error_description: "client_id is required" }, 400);
+    }
+
     if (!redirectUri) {
       logger.warn("OAuth authorization failed: missing redirect_uri");
       return c.json({ error: "invalid_request", error_description: "redirect_uri is required" }, 400);
+    }
+
+    // The client must be registered and the redirect_uri must exactly match one
+    // of its registered URIs. Without this check, an attacker could send a victim
+    // a crafted link and have the authorization code delivered to their own server.
+    const client = await oauthStore.getClient(clientId);
+    if (!client) {
+      logger.warn("OAuth authorization failed: unknown client_id");
+      return c.json({ error: "invalid_client", error_description: "Unknown client_id" }, 400);
+    }
+
+    if (!client.redirectUris.includes(redirectUri)) {
+      logger.warn("OAuth authorization failed: redirect_uri not registered for client");
+      return c.json({ error: "invalid_request", error_description: "redirect_uri is not registered for this client" }, 400);
+    }
+
+    // PKCE with S256 is mandatory (OAuth 2.1 / MCP authorization spec).
+    if (!codeChallenge || codeChallengeMethod !== "S256") {
+      logger.warn("OAuth authorization failed: missing or unsupported PKCE parameters");
+      return c.json({ error: "invalid_request", error_description: "code_challenge with code_challenge_method=S256 is required" }, 400);
+    }
+
+    if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+      logger.warn("OAuth authorization failed: malformed code_challenge");
+      return c.json({ error: "invalid_request", error_description: "Malformed code_challenge" }, 400);
     }
 
     if (!state) {
@@ -184,9 +274,10 @@ export function createOAuthRouter(config: OAuthConfig) {
   oauth.get("/callback", async (c) => {
     const code = c.req.query("code");
     const internalState = c.req.query("state");
+    const googleError = c.req.query("error");
 
-    if (!code || !internalState) {
-      logger.warn("OAuth callback failed: missing code or state");
+    if (!internalState) {
+      logger.warn("OAuth callback failed: missing state");
       return c.json({ error: "invalid_request" }, 400);
     }
 
@@ -194,6 +285,17 @@ export function createOAuthRouter(config: OAuthConfig) {
     if (!session) {
       logger.warn("OAuth callback failed: invalid or expired state");
       return c.json({ error: "invalid_state" }, 400);
+    }
+
+    // The internal state is single-use.
+    await oauthStore.deleteSession(internalState);
+
+    if (googleError || !code) {
+      logger.warn("OAuth callback: Google returned an error or no code");
+      const errorUrl = new URL(session.redirectUri);
+      errorUrl.searchParams.append("error", googleError === "access_denied" ? "access_denied" : "server_error");
+      errorUrl.searchParams.append("state", session.state);
+      return c.redirect(errorUrl.toString());
     }
 
     logger.info("Processing OAuth callback from Google");
@@ -206,8 +308,6 @@ export function createOAuthRouter(config: OAuthConfig) {
       redirectUri: session.redirectUri,
       codeChallenge: session.codeChallenge,
     });
-
-    await oauthStore.deleteSession(internalState);
 
     const redirectUrl = new URL(session.redirectUri);
     redirectUrl.searchParams.append("code", authCode);
@@ -222,19 +322,34 @@ export function createOAuthRouter(config: OAuthConfig) {
     async (c) => {
     const body = await c.req.parseBody();
     const grantType = body.grant_type;
-    const code = body.code as string;
-    const codeVerifier = body.code_verifier as string;
-    const redirectUri = body.redirect_uri as string;
+    const code = body.code;
+    const codeVerifier = body.code_verifier;
+    const redirectUri = body.redirect_uri;
+    const clientId = body.client_id;
 
     if (grantType !== "authorization_code") {
       logger.warn("Token exchange failed: unsupported grant type");
       return c.json({ error: "unsupported_grant_type" }, 400);
     }
 
+    if (typeof code !== "string" || !code) {
+      logger.warn("Token exchange failed: missing code");
+      return c.json({ error: "invalid_request", error_description: "code is required" }, 400);
+    }
+
     const authCodeData = await oauthStore.getAuthCode(code);
     if (!authCodeData) {
       logger.warn("Token exchange failed: invalid authorization code");
       return c.json({ error: "invalid_grant" }, 400);
+    }
+
+    // Authorization codes are single-use: invalidate it on first presentation,
+    // whether or not the exchange below succeeds.
+    await oauthStore.deleteAuthCode(code);
+
+    if (authCodeData.clientId && clientId !== authCodeData.clientId) {
+      logger.warn("Token exchange failed: client_id mismatch");
+      return c.json({ error: "invalid_grant", error_description: "client_id does not match authorization request" }, 400);
     }
 
     logger.info("Processing token exchange request");
@@ -244,17 +359,21 @@ export function createOAuthRouter(config: OAuthConfig) {
       return c.json({ error: "invalid_grant", error_description: "redirect_uri does not match authorization request" }, 400);
     }
 
-    if (authCodeData.codeChallenge) {
-      if (!codeVerifier) {
-        logger.warn("PKCE validation failed: missing code_verifier");
-        return c.json({ error: "invalid_request", error_description: "code_verifier required" }, 400);
-      }
+    if (!authCodeData.codeChallenge) {
+      // Should not happen: /authorize requires PKCE.
+      logger.warn("PKCE validation failed: no code_challenge stored");
+      return c.json({ error: "invalid_grant" }, 400);
+    }
 
-      const hash = base64URLEncode(sha256(codeVerifier));
-      if (hash !== authCodeData.codeChallenge) {
-        logger.warn("PKCE validation failed: invalid code_verifier");
-        return c.json({ error: "invalid_grant", error_description: "invalid code_verifier" }, 400);
-      }
+    if (typeof codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier)) {
+      logger.warn("PKCE validation failed: missing or malformed code_verifier");
+      return c.json({ error: "invalid_request", error_description: "valid code_verifier required" }, 400);
+    }
+
+    const hash = base64URLEncode(sha256(codeVerifier));
+    if (!safeEqual(hash, authCodeData.codeChallenge)) {
+      logger.warn("PKCE validation failed: invalid code_verifier");
+      return c.json({ error: "invalid_grant", error_description: "invalid code_verifier" }, 400);
     }
 
     try {
@@ -286,8 +405,6 @@ export function createOAuthRouter(config: OAuthConfig) {
         googleRefreshToken: tokenData.refresh_token,
         expiresAt: Date.now() + tokenData.expires_in * 1000,
       });
-
-      await oauthStore.deleteAuthCode(code);
 
       logger.info("Token exchange completed successfully");
 

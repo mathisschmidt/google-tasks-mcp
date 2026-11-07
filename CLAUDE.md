@@ -38,8 +38,8 @@ Client → Hono HTTP (app.ts) → Security headers middleware → CORS middlewar
 - **`src/server/app.ts`** — Hono routes and security middleware. Route-specific CSP headers override the default restrictive CSP (the middleware checks `c.res.headers` before setting defaults).
 - **`src/server/mcp-endpoints.ts`** — GET creates SSE stream + MCP session; POST either creates a new session or routes messages to existing ones. Sessions use `TransformStream` for SSE output with 15s heartbeat pings.
 - **`src/transport/mcp-transport.ts`** — Custom `HonoSSETransport` implementing MCP's `Transport` interface. `SessionManager` tracks sessions with 30-minute timeout and periodic cleanup.
-- **`src/auth/oauth.ts`** — Full OAuth 2.0 with PKCE. Three-legged flow: client registers → redirects to Google → callback exchanges code → returns MCP bearer token (UUID). `OAuthStore` uses Deno KV with TTLs.
-- **`src/auth/token-store.ts`** — Encrypts Google tokens (AES-256-GCM) before storing in Deno KV. 30-day TTL.
+- **`src/auth/oauth.ts`** — Full OAuth 2.0 with mandatory PKCE (S256). Clients must register (`/register`) https or loopback redirect URIs; `/authorize` only accepts a registered `client_id` + exact `redirect_uri` match. Auth codes and states are single-use. Three-legged flow: client registers → redirects to Google → callback exchanges code → returns MCP bearer token (UUID). `OAuthStore` uses Deno KV with TTLs.
+- **`src/auth/token-store.ts`** — Encrypts Google tokens (AES-256-GCM) before storing in Deno KV, keyed by the SHA-256 hash of the MCP bearer token. 30-day TTL.
 - **`src/google/api.ts`** — Thin wrapper over Google Tasks REST API. All calls go through `makeGoogleRequest()` which handles auth token refresh automatically (60s expiry threshold). Functions return promises directly (not async).
 - **`src/tools/tasklists.ts`** and **`src/tools/tasks.ts`** — 14 MCP tools registered via `server.registerTool()`. Each uses Zod for input schemas and `addReadableTimestamps()` for response processing.
 - **`src/utils/logger.ts`** — Logger with automatic redaction of tokens, secrets, user IDs. Set level via `LOG_LEVEL` env var.
@@ -61,7 +61,7 @@ server.registerTool("tool_name", {
 ### Environment Variables
 
 Required: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `ENCRYPTION_SECRET`
-Optional: `PORT` (default 3000), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated)
+Optional: `PORT` (default 3000), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated), `TRUST_PROXY_HEADERS` (default false; trust X-Forwarded-For for rate limiting only behind a proxy that overwrites it)
 
 ## Conventions
 

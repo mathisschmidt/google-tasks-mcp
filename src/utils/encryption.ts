@@ -9,7 +9,13 @@ const SALT_LENGTH = 64;
 const TAG_LENGTH = 16;
 const ITERATIONS = 100000;
 
+let cachedKey: Buffer | null = null;
+
+// The key is derived once and cached: re-running 100k PBKDF2 iterations on
+// every encrypt/decrypt call added significant latency to each request.
 function getEncryptionKey(): Buffer {
+  if (cachedKey) return cachedKey;
+
   const secret = process.env.ENCRYPTION_SECRET;
   if (!secret) {
     throw new Error("ENCRYPTION_SECRET environment variable is not set");
@@ -19,7 +25,8 @@ function getEncryptionKey(): Buffer {
   }
 
   const salt = Buffer.from("google-tasks-mcp-salt");
-  return crypto.pbkdf2Sync(secret, salt, ITERATIONS, KEY_LENGTH, "sha256");
+  cachedKey = crypto.pbkdf2Sync(secret, salt, ITERATIONS, KEY_LENGTH, "sha256");
+  return cachedKey;
 }
 
 export function encrypt(text: string): string {

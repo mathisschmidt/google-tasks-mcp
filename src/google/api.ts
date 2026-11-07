@@ -65,7 +65,7 @@ export function listTaskLists(mcpToken: string, maxResults?: number, pageToken?:
 }
 
 export function getTaskList(mcpToken: string, taskListId: string) {
-  return makeGoogleRequest(mcpToken, `/users/@me/lists/${taskListId}`);
+  return makeGoogleRequest(mcpToken, `/users/@me/lists/${encodeURIComponent(taskListId)}`);
 }
 
 export function insertTaskList(mcpToken: string, title: string) {
@@ -76,21 +76,21 @@ export function insertTaskList(mcpToken: string, title: string) {
 }
 
 export function updateTaskList(mcpToken: string, taskListId: string, title: string) {
-  return makeGoogleRequest(mcpToken, `/users/@me/lists/${taskListId}`, {
+  return makeGoogleRequest(mcpToken, `/users/@me/lists/${encodeURIComponent(taskListId)}`, {
     method: "PUT",
     body: JSON.stringify({ id: taskListId, title }),
   });
 }
 
 export function patchTaskList(mcpToken: string, taskListId: string, updates: any) {
-  return makeGoogleRequest(mcpToken, `/users/@me/lists/${taskListId}`, {
+  return makeGoogleRequest(mcpToken, `/users/@me/lists/${encodeURIComponent(taskListId)}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
   });
 }
 
 export function deleteTaskList(mcpToken: string, taskListId: string) {
-  return makeGoogleRequest(mcpToken, `/users/@me/lists/${taskListId}`, {
+  return makeGoogleRequest(mcpToken, `/users/@me/lists/${encodeURIComponent(taskListId)}`, {
     method: "DELETE",
   });
 }
@@ -124,11 +124,11 @@ export function listTasks(
   if (options?.updatedMin) params.append("updatedMin", options.updatedMin);
 
   const query = params.toString() ? `?${params.toString()}` : "";
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks${query}`);
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks${query}`);
 }
 
 export function getTask(mcpToken: string, taskListId: string, taskId: string) {
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks/${taskId}`);
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`);
 }
 
 export function insertTask(mcpToken: string, taskListId: string, task: any, parent?: string, previous?: string) {
@@ -137,34 +137,34 @@ export function insertTask(mcpToken: string, taskListId: string, task: any, pare
   if (previous) params.append("previous", previous);
 
   const query = params.toString() ? `?${params.toString()}` : "";
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks${query}`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks${query}`, {
     method: "POST",
     body: JSON.stringify(task),
   });
 }
 
 export function updateTask(mcpToken: string, taskListId: string, taskId: string, task: any) {
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks/${taskId}`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`, {
     method: "PUT",
     body: JSON.stringify({ ...task, id: taskId }),
   });
 }
 
 export function patchTask(mcpToken: string, taskListId: string, taskId: string, updates: any) {
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks/${taskId}`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
   });
 }
 
 export function deleteTask(mcpToken: string, taskListId: string, taskId: string) {
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks/${taskId}`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`, {
     method: "DELETE",
   });
 }
 
 export function clearTasks(mcpToken: string, taskListId: string) {
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/clear`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/clear`, {
     method: "POST",
   });
 }
@@ -181,7 +181,7 @@ export function moveTask(
   if (previous) params.append("previous", previous);
 
   const query = params.toString() ? `?${params.toString()}` : "";
-  return makeGoogleRequest(mcpToken, `/lists/${taskListId}/tasks/${taskId}/move${query}`, {
+  return makeGoogleRequest(mcpToken, `/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}/move${query}`, {
     method: "POST",
   });
 }

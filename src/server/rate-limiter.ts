@@ -1,3 +1,4 @@
+import process from "node:process";
 import { openKv } from "@deno/kv";
 import { Context, Next } from "hono";
 
@@ -5,6 +6,27 @@ let kv: Awaited<ReturnType<typeof openKv>> | null = null;
 
 export async function initRateLimiter() {
   kv = await openKv();
+}
+
+/**
+ * Returns the client IP used as the rate-limit key.
+ *
+ * By default the socket address provided by the runtime is used (on Deno /
+ * Deno Deploy, Hono exposes it as `c.env.remoteAddr`). Client-supplied headers
+ * such as X-Forwarded-For are only trusted when TRUST_PROXY_HEADERS=true, i.e.
+ * when the server runs behind a reverse proxy that overwrites them — otherwise
+ * anyone could bypass the limit by sending a different header on each request.
+ */
+function getClientIp(c: Context): string {
+  if (process.env.TRUST_PROXY_HEADERS === "true") {
+    const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+    const realIp = c.req.header("x-real-ip")?.trim();
+    if (forwarded) return forwarded;
+    if (realIp) return realIp;
+  }
+
+  const env = c.env as { remoteAddr?: { hostname?: string } } | undefined;
+  return env?.remoteAddr?.hostname || "unknown";
 }
 
 interface RateLimitConfig {
@@ -19,7 +41,7 @@ export function rateLimit(config: RateLimitConfig) {
       return;
     }
 
-    const ip = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+    const ip = getClientIp(c);
     const key = ["rate_limit", c.req.path, ip];
 
     const now = Date.now();

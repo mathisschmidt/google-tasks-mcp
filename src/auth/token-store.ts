@@ -1,5 +1,14 @@
 import { openKv } from "@deno/kv";
+import crypto from "node:crypto";
 import { encrypt, decrypt } from "../utils/encryption.ts";
+
+/**
+ * MCP bearer tokens are never stored in clear: the KV key is their SHA-256
+ * hash, so a leak of the KV database does not expose usable bearer tokens.
+ */
+function tokenKey(mcpToken: string): string[] {
+  return ["tokens_v2", crypto.createHash("sha256").update(mcpToken).digest("hex")];
+}
 
 export interface TokenData {
   googleAccessToken: string;
@@ -30,12 +39,12 @@ class TokenStore {
       expiresAt: tokenData.expiresAt,
     };
 
-    await this.kv.set(["tokens", mcpToken], encryptedData, { expireIn: TTL_MS });
+    await this.kv.set(tokenKey(mcpToken), encryptedData, { expireIn: TTL_MS });
   }
 
   async getTokens(mcpToken: string): Promise<TokenData | null> {
     if (!this.kv) throw new Error("KV not initialized");
-    const result = await this.kv.get<EncryptedTokenData>(["tokens", mcpToken]);
+    const result = await this.kv.get<EncryptedTokenData>(tokenKey(mcpToken));
 
     if (!result.value) {
       return null;
@@ -70,12 +79,12 @@ class TokenStore {
     };
 
     const TTL_MS = 30 * 24 * 60 * 60 * 1000;
-    await this.kv.set(["tokens", mcpToken], encryptedData, { expireIn: TTL_MS });
+    await this.kv.set(tokenKey(mcpToken), encryptedData, { expireIn: TTL_MS });
   }
 
   async deleteToken(mcpToken: string): Promise<void> {
     if (!this.kv) throw new Error("KV not initialized");
-    await this.kv.delete(["tokens", mcpToken]);
+    await this.kv.delete(tokenKey(mcpToken));
   }
 }
 
