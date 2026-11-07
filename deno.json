@@ -1,12 +1,17 @@
 {
   "tasks": {
-    "dev": "deno run --allow-net --allow-env --allow-read --allow-write build/index.js",
+    "dev": "deno serve --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-sys --allow-ffi --port 3000 build/index.js",
     "lint": "deno lint"
   },
   "lint": {
-    "include": ["src/"],
+    "include": [
+      "src/"
+    ],
     "rules": {
-      "exclude": ["no-explicit-any", "no-console"]
+      "exclude": [
+        "no-explicit-any",
+        "no-console"
+      ]
     }
   }
 }

@@ -1,4 +1,5 @@
 import { openKv } from "@deno/kv";
+import { getKvPath } from "../config.ts";
 import crypto from "node:crypto";
 import { encrypt, decrypt } from "../utils/encryption.ts";
 
@@ -26,7 +27,7 @@ class TokenStore {
   private kv: Awaited<ReturnType<typeof openKv>> | null = null;
 
   async init() {
-    this.kv = await openKv();
+    this.kv = await openKv(getKvPath());
   }
 
   async storeTokens(mcpToken: string, tokenData: TokenData): Promise<void> {

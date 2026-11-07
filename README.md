@@ -216,6 +216,25 @@ deployctl deploy --project=google-tasks-mcp build/index.js
    - Add all required environment variables
    - Restart the deployment
 
+#### Self-host with Docker / Portainer
+
+A `Dockerfile` and a `docker-compose.yml` are provided. The compose file builds the
+image straight from this GitHub repository, so it can be pasted as-is into
+Portainer (**Stacks → Add stack → Web editor**).
+
+1. Paste `docker-compose.yml` into the web editor.
+2. Under **Environment variables**, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `GOOGLE_REDIRECT_URI` (`https://your-domain.com/callback`) and `ENCRYPTION_SECRET`
+   (`openssl rand -hex 32`, never change it afterwards).
+3. Deploy, then expose port 3000 through an HTTPS reverse proxy (Nginx Proxy
+   Manager, Traefik, Caddy, Cloudflare Tunnel...). The port is bound to
+   `127.0.0.1` by default so it is not reachable directly from the Internet.
+
+Data (registered clients, encrypted tokens) is stored in the
+`google-tasks-mcp-data` volume (`KV_PATH=/data/kv.sqlite3`).
+
+Locally: `docker compose up -d --build` with a `.env` file next to the compose file.
+
 ### Step 5: Update Google OAuth Settings
 
 Go back to your Google Cloud Console OAuth client and update the redirect URI to match your deployed URL:
@@ -254,6 +273,8 @@ Configure your MCP client with the following connection details:
 | `PORT` | No | Server port (default: 3000) |
 | `LOG_LEVEL` | No | Logging level: trace, debug, info, warn, error (default: info) |
 | `ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins for browser clients |
+| `TRUST_PROXY_HEADERS` | No | `true` to use `X-Forwarded-For` for rate limiting — only behind a reverse proxy that overwrites it (default: false) |
+| `KV_PATH` | No | SQLite file for Deno KV when self-hosting (e.g. `/data/kv.sqlite3`); unset on Deno Deploy |
 
 ### Development Commands
 

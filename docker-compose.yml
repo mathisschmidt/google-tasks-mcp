@@ -1,0 +1,49 @@
+# Google Tasks MCP Server — stack for Portainer (Stacks > Add stack > Web editor)
+#
+# 1. Paste this file in the web editor.
+# 2. In "Environment variables", define at least:
+#      GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, ENCRYPTION_SECRET
+#    (ENCRYPTION_SECRET: 32+ chars, e.g. `openssl rand -hex 32`. Never change it
+#    afterwards, or stored tokens can no longer be decrypted.)
+# 3. Put the service behind an HTTPS reverse proxy (Nginx Proxy Manager, Traefik,
+#    Caddy, Cloudflare Tunnel...). GOOGLE_REDIRECT_URI must be
+#    https://<your-domain>/callback and be declared in the Google Cloud console.
+#
+# The image is built directly from the GitHub repository (no registry needed).
+
+services:
+  google-tasks-mcp:
+    build:
+      context: https://github.com/mathisschmidt/google-tasks-mcp.git#security-fix
+      dockerfile: Dockerfile
+    image: google-tasks-mcp:local
+    container_name: google-tasks-mcp
+    restart: unless-stopped
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?GOOGLE_REDIRECT_URI is required}
+      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:?ENCRYPTION_SECRET is required}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Behind a reverse proxy, the socket IP is the proxy's: trust its
+      # X-Forwarded-For header for rate limiting. Only safe if port 3000 is NOT
+      # reachable directly from the Internet (see "ports" below).
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+      KV_PATH: /data/kv.sqlite3
+    ports:
+      # Bound to localhost only: the reverse proxy on the host reaches it, the
+      # Internet does not. If your proxy runs in another container, attach both
+      # to the same Docker network and remove this mapping instead.
+      - "127.0.0.1:${HOST_PORT:-3000}:3000"
+    volumes:
+      - google-tasks-mcp-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  google-tasks-mcp-data:

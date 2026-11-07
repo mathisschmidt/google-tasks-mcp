@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { tokenStore } from "./token-store.ts";
 import crypto from "node:crypto";
 import { openKv } from "@deno/kv";
+import { getKvPath } from "../config.ts";
 import { createLogger } from "../utils/logger.ts";
 import { rateLimit } from "../server/rate-limiter.ts";
 
@@ -42,7 +43,7 @@ class OAuthStore {
   private kv: Awaited<ReturnType<typeof openKv>> | null = null;
 
   async init() {
-    this.kv = await openKv();
+    this.kv = await openKv(getKvPath());
   }
 
   async storeSession(sessionId: string, session: OAuthSession): Promise<void> {

@@ -11,7 +11,8 @@ Google Tasks MCP Server — an open-source Model Context Protocol server that le
 - **Build**: `npm run build` (runs `tsc`)
 - **Dev (watch)**: `npm run dev` (runs `tsc --watch`)
 - **Lint**: `deno lint` (configured in `deno.json`, targets `src/`)
-- **Run**: `deno task dev` (runs compiled `build/index.js`)
+- **Run**: `deno task dev` (`deno serve` on compiled `build/index.js`, port 3000)
+- **Docker**: `Dockerfile` (Node build stage → Deno runtime) and `docker-compose.yml` (Portainer-ready, builds from the GitHub repo, KV persisted in the `/data` volume)
 - **Generate encryption secret**: `npm run generate-secret`
 
 No test framework is configured.
@@ -61,7 +62,7 @@ server.registerTool("tool_name", {
 ### Environment Variables
 
 Required: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `ENCRYPTION_SECRET`
-Optional: `PORT` (default 3000), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated), `TRUST_PROXY_HEADERS` (default false; trust X-Forwarded-For for rate limiting only behind a proxy that overwrites it)
+Optional: `PORT` (default 3000), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated), `TRUST_PROXY_HEADERS` (default false; trust X-Forwarded-For for rate limiting only behind a proxy that overwrites it), `KV_PATH` (SQLite file for Deno KV, e.g. `/data/kv.sqlite3` in Docker; unset = runtime default, i.e. Deno Deploy's KV)
 
 ## Conventions
 
