@@ -224,11 +224,17 @@ Portainer (**Stacks → Add stack → Web editor**).
 
 1. Paste `docker-compose.yml` into the web editor.
 2. Under **Environment variables**, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `GOOGLE_REDIRECT_URI` (`https://your-domain.com/callback`) and `ENCRYPTION_SECRET`
-   (`openssl rand -hex 32`, never change it afterwards).
+   `ENCRYPTION_SECRET` (`openssl rand -hex 32`, never change it afterwards),
+   `MCP_PUBLIC_URL` (`https://your-domain.com`) and `MCP_AUTH_PASSWORD`
+   (`openssl rand -base64 24`). Add `https://your-domain.com/callback` as an
+   authorized redirect URI in the Google Cloud console.
 3. Deploy, then expose port 3000 through an HTTPS reverse proxy (Nginx Proxy
    Manager, Traefik, Caddy, Cloudflare Tunnel...). The port is bound to
    `127.0.0.1` by default so it is not reachable directly from the Internet.
+
+When you connect a client (e.g. Claude), a sign-in page asks for
+`MCP_AUTH_PASSWORD` before redirecting you to Google, so only you can use
+your server.
 
 Data (registered clients, encrypted tokens) is stored in the
 `google-tasks-mcp-data` volume (`KV_PATH=/data/kv.sqlite3`).
@@ -268,9 +274,12 @@ Configure your MCP client with the following connection details:
 |----------|----------|-------------|
 | `GOOGLE_CLIENT_ID` | Yes | Your Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Yes | Your Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | Yes | OAuth callback URL (must match Google Cloud Console settings) |
+| `GOOGLE_REDIRECT_URI` | Yes* | OAuth callback URL (must match Google Cloud Console settings). *Defaults to `<MCP_PUBLIC_URL>/callback` |
 | `ENCRYPTION_SECRET` | Yes | 32+ character secret for token encryption (generate with `npm run generate-secret`) |
-| `PORT` | No | Server port (default: 3000) |
+| `MCP_HOST` | No | Bind address (default: `0.0.0.0`) |
+| `MCP_PORT` | No | Bind port (default: 3000; `PORT` is accepted as a fallback) |
+| `MCP_PUBLIC_URL` | No | Public HTTPS URL of the server, without `/mcp`. Used in the OAuth metadata (required behind a reverse proxy) |
+| `MCP_AUTH_PASSWORD` | Recommended | Sign-in password (min 12 chars) asked before connecting a client. Without it, anyone reaching the server can use it |
 | `LOG_LEVEL` | No | Logging level: trace, debug, info, warn, error (default: info) |
 | `ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins for browser clients |
 | `TRUST_PROXY_HEADERS` | No | `true` to use `X-Forwarded-For` for rate limiting — only behind a reverse proxy that overwrites it (default: false) |

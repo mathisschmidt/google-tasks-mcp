@@ -15,6 +15,8 @@ FROM denoland/deno:debian-2.9.6
 WORKDIR /app
 
 ENV KV_PATH=/data/kv.sqlite3 \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=3000 \
     LOG_LEVEL=info
 
 COPY --from=build /app/node_modules ./node_modules
@@ -29,6 +31,6 @@ USER deno
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD ["deno", "eval", "const r = await fetch('http://127.0.0.1:3000/health'); Deno.exit(r.ok ? 0 : 1);"]
+  CMD ["deno", "eval", "const r = await fetch(`http://127.0.0.1:${Deno.env.get('MCP_PORT') ?? '3000'}/health`); Deno.exit(r.ok ? 0 : 1);"]
 
-CMD ["deno", "serve", "--unstable-kv", "--allow-net", "--allow-env", "--allow-read", "--allow-write=/data", "--allow-sys", "--allow-ffi", "--host", "0.0.0.0", "--port", "3000", "build/index.js"]
+CMD ["deno", "run", "--unstable-kv", "--allow-net", "--allow-env", "--allow-read", "--allow-write=/data", "--allow-sys", "--allow-ffi", "build/index.js"]

@@ -11,7 +11,7 @@ Google Tasks MCP Server — an open-source Model Context Protocol server that le
 - **Build**: `npm run build` (runs `tsc`)
 - **Dev (watch)**: `npm run dev` (runs `tsc --watch`)
 - **Lint**: `deno lint` (configured in `deno.json`, targets `src/`)
-- **Run**: `deno task dev` (`deno serve` on compiled `build/index.js`, port 3000)
+- **Run**: `deno task dev` (runs compiled `build/index.js`, which starts `Deno.serve` on `MCP_HOST:MCP_PORT`)
 - **Docker**: `Dockerfile` (Node build stage → Deno runtime) and `docker-compose.yml` (Portainer-ready, builds from the GitHub repo, KV persisted in the `/data` volume)
 - **Generate encryption secret**: `npm run generate-secret`
 
@@ -21,13 +21,13 @@ No test framework is configured.
 
 ### Entry Point & Runtime
 
-`src/index.ts` initializes Deno KV stores (tokens, OAuth sessions, rate limiter), sets OAuth config from env vars, creates the Hono app, and exports `{ fetch: app.fetch }` for Deno Deploy.
+`src/index.ts` loads and validates server settings (`loadServerSettings()` in `config.ts`), initializes Deno KV stores (tokens, OAuth sessions, rate limiter), sets OAuth config from env vars, creates the Hono app, and starts it with `Deno.serve({ hostname: MCP_HOST, port: MCP_PORT })`. Must run under Deno.
 
 ### Request Flow
 
 ```
 Client → Hono HTTP (app.ts) → Security headers middleware → CORS middleware
-  ├── OAuth routes (/register, /authorize, /callback, /token) → oauth.ts
+  ├── OAuth routes (/register, /authorize, /oauth/login, /callback, /token) → oauth.ts
   ├── MCP routes (/mcp GET/POST) → Bearer auth middleware → mcp-endpoints.ts
   │     └── Creates McpServer + HonoSSETransport per session
   │           └── Registered tools (tools/*.ts) → google/api.ts → Google Tasks API
@@ -39,7 +39,7 @@ Client → Hono HTTP (app.ts) → Security headers middleware → CORS middlewar
 - **`src/server/app.ts`** — Hono routes and security middleware. Route-specific CSP headers override the default restrictive CSP (the middleware checks `c.res.headers` before setting defaults).
 - **`src/server/mcp-endpoints.ts`** — GET creates SSE stream + MCP session; POST either creates a new session or routes messages to existing ones. Sessions use `TransformStream` for SSE output with 15s heartbeat pings.
 - **`src/transport/mcp-transport.ts`** — Custom `HonoSSETransport` implementing MCP's `Transport` interface. `SessionManager` tracks sessions with 30-minute timeout and periodic cleanup.
-- **`src/auth/oauth.ts`** — Full OAuth 2.0 with mandatory PKCE (S256). Clients must register (`/register`) https or loopback redirect URIs; `/authorize` only accepts a registered `client_id` + exact `redirect_uri` match. Auth codes and states are single-use. Three-legged flow: client registers → redirects to Google → callback exchanges code → returns MCP bearer token (UUID). `OAuthStore` uses Deno KV with TTLs.
+- **`src/auth/oauth.ts`** — Full OAuth 2.0 with mandatory PKCE (S256). Clients must register (`/register`) https or loopback redirect URIs; `/authorize` only accepts a registered `client_id` + exact `redirect_uri` match. Auth codes and states are single-use. If `MCP_AUTH_PASSWORD` is set, `/authorize` redirects to a sign-in page (`/oauth/login`, 5 attempts max per request, 1s delay on failure) before redirecting to Google. Three-legged flow: client registers → redirects to Google → callback exchanges code → returns MCP bearer token (UUID). `OAuthStore` uses Deno KV with TTLs.
 - **`src/auth/token-store.ts`** — Encrypts Google tokens (AES-256-GCM) before storing in Deno KV, keyed by the SHA-256 hash of the MCP bearer token. 30-day TTL.
 - **`src/google/api.ts`** — Thin wrapper over Google Tasks REST API. All calls go through `makeGoogleRequest()` which handles auth token refresh automatically (60s expiry threshold). Functions return promises directly (not async).
 - **`src/tools/tasklists.ts`** and **`src/tools/tasks.ts`** — 14 MCP tools registered via `server.registerTool()`. Each uses Zod for input schemas and `addReadableTimestamps()` for response processing.
@@ -61,8 +61,8 @@ server.registerTool("tool_name", {
 
 ### Environment Variables
 
-Required: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `ENCRYPTION_SECRET`
-Optional: `PORT` (default 3000), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated), `TRUST_PROXY_HEADERS` (default false; trust X-Forwarded-For for rate limiting only behind a proxy that overwrites it), `KV_PATH` (SQLite file for Deno KV, e.g. `/data/kv.sqlite3` in Docker; unset = runtime default, i.e. Deno Deploy's KV)
+Required: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ENCRYPTION_SECRET`, and `GOOGLE_REDIRECT_URI` unless `MCP_PUBLIC_URL` is set (defaults to `<MCP_PUBLIC_URL>/callback`)
+Optional: `MCP_HOST` (default 0.0.0.0), `MCP_PORT` (default 3000, falls back to `PORT`), `MCP_PUBLIC_URL` (public https base URL, used for OAuth metadata/HSTS/redirects), `MCP_AUTH_PASSWORD` (min 12 chars; enables the sign-in page), `LOG_LEVEL` (default info), `ALLOWED_ORIGINS` (comma-separated), `TRUST_PROXY_HEADERS` (default false; trust X-Forwarded-For for rate limiting only behind a proxy that overwrites it), `KV_PATH` (SQLite file for Deno KV, e.g. `/data/kv.sqlite3` in Docker; unset = runtime default, i.e. Deno Deploy's KV)
 
 ## Conventions
 

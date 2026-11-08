@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { tokenStore } from "./token-store.ts";
 import crypto from "node:crypto";
 import { openKv } from "@deno/kv";
@@ -16,7 +16,13 @@ export interface OAuthConfig {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
+  /** When set, /authorize shows a sign-in page asking for this password before redirecting to Google. */
+  authPassword?: string;
 }
+
+const LOGIN_PATH = "/oauth/login";
+const LOGIN_REQUEST_TTL_MS = 10 * 60 * 1000;
+const MAX_LOGIN_ATTEMPTS = 5;
 
 interface OAuthSession {
   state: string;
@@ -24,6 +30,11 @@ interface OAuthSession {
   codeChallengeMethod?: string;
   redirectUri: string;
   clientId?: string;
+}
+
+interface LoginRequest {
+  session: OAuthSession;
+  attempts: number;
 }
 
 interface AuthCode {
@@ -60,6 +71,22 @@ class OAuthStore {
   async deleteSession(sessionId: string): Promise<void> {
     if (!this.kv) throw new Error("KV not initialized");
     await this.kv.delete(["oauth_sessions", sessionId]);
+  }
+
+  async storeLoginRequest(loginId: string, request: LoginRequest): Promise<void> {
+    if (!this.kv) throw new Error("KV not initialized");
+    await this.kv.set(["login_requests", loginId], request, { expireIn: LOGIN_REQUEST_TTL_MS });
+  }
+
+  async getLoginRequest(loginId: string): Promise<LoginRequest | null> {
+    if (!this.kv) throw new Error("KV not initialized");
+    const result = await this.kv.get<LoginRequest>(["login_requests", loginId]);
+    return result.value;
+  }
+
+  async deleteLoginRequest(loginId: string): Promise<void> {
+    if (!this.kv) throw new Error("KV not initialized");
+    await this.kv.delete(["login_requests", loginId]);
   }
 
   async storeAuthCode(code: string, data: AuthCode): Promise<void> {
@@ -130,6 +157,64 @@ function isAcceptableRedirectUri(value: unknown): value is string {
   if (url.protocol === "https:") return true;
   if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return true;
   return false;
+}
+
+/** Constant-time password check (hashing first makes it length-independent). */
+function passwordMatches(candidate: string, expected: string): boolean {
+  const a = crypto.createHash("sha256").update(candidate).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// The form posts to this server, which then redirects to Google: Chrome applies
+// form-action to redirects after a form submission, so Google must be allowed.
+const LOGIN_PAGE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'";
+
+function renderPage(body: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Sign in - Google Tasks MCP</title>
+<style>
+  :root{color-scheme:light dark}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0b0d12;color:#e7eaf0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px}
+  main{background:#12151c;border:1px solid #232936;border-radius:14px;padding:28px;max-width:380px;width:100%}
+  h1{font-size:20px;margin:0 0 8px}
+  p{color:#9aa3b2;font-size:14px;line-height:1.5;margin:0 0 18px}
+  label{display:block;font-size:14px;margin-bottom:6px}
+  input[type=password]{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #232936;background:#0b0d12;color:inherit;font-size:15px}
+  button{margin-top:16px;width:100%;padding:11px;border:0;border-radius:8px;background:#4f46e5;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+  .error{color:#ff6b6b;font-size:14px;margin:12px 0 0}
+  code{color:#e7eaf0}
+</style></head><body><main>${body}</main></body></html>`;
+}
+
+function renderLoginForm(loginId: string, redirectUri: string, error?: string): string {
+  let target = redirectUri;
+  try {
+    target = new URL(redirectUri).host;
+  } catch {
+    // keep raw value
+  }
+  return renderPage(`
+    <h1>Connect Google Tasks</h1>
+    <p>An application at <code>${escapeHtml(target)}</code> wants to access your Google Tasks through this server. Enter the server password to continue to Google.</p>
+    <form method="post" action="${LOGIN_PATH}">
+      <input type="hidden" name="req" value="${escapeHtml(loginId)}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
+      <button type="submit">Continue</button>
+    </form>`);
 }
 
 /** Constant-time string comparison to avoid leaking information via timing. */
@@ -249,15 +334,77 @@ export function createOAuthRouter(config: OAuthConfig) {
 
     logger.info("Starting OAuth authorization flow");
 
-    const internalState = crypto.randomUUID();
-
-    await oauthStore.storeSession(internalState, {
+    const session: OAuthSession = {
       state,
       codeChallenge,
       codeChallengeMethod,
       redirectUri,
       clientId,
-    });
+    };
+
+    if (config.authPassword) {
+      const loginId = crypto.randomBytes(32).toString("base64url");
+      await oauthStore.storeLoginRequest(loginId, { session, attempts: 0 });
+      return c.redirect(`${LOGIN_PATH}?req=${encodeURIComponent(loginId)}`);
+    }
+
+    return redirectToGoogle(c, session);
+    }
+  );
+
+  oauth.get(LOGIN_PATH, async (c) => {
+    c.header("Content-Security-Policy", LOGIN_PAGE_CSP);
+    c.header("Cache-Control", "no-store");
+    const loginId = c.req.query("req") || "";
+    const login = loginId ? await oauthStore.getLoginRequest(loginId) : null;
+    if (!login) {
+      return c.html(renderPage("<h1>Link expired</h1><p>This sign-in link has expired. Start the connection again from your MCP client.</p>"), 400);
+    }
+    return c.html(renderLoginForm(loginId, login.session.redirectUri));
+  });
+
+  oauth.post(
+    LOGIN_PATH,
+    rateLimit({ maxRequests: 30, windowMs: 3600000 }),
+    async (c) => {
+    c.header("Content-Security-Policy", LOGIN_PAGE_CSP);
+    c.header("Cache-Control", "no-store");
+
+    if (!config.authPassword) {
+      return c.notFound();
+    }
+
+    const body = await c.req.parseBody();
+    const loginId = typeof body.req === "string" ? body.req : "";
+    const password = typeof body.password === "string" ? body.password : "";
+
+    const login = loginId ? await oauthStore.getLoginRequest(loginId) : null;
+    if (!login) {
+      return c.html(renderPage("<h1>Link expired</h1><p>This sign-in link has expired. Start the connection again from your MCP client.</p>"), 400);
+    }
+
+    if (!passwordMatches(password, config.authPassword)) {
+      const attempts = login.attempts + 1;
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // slow down guessing
+      if (attempts >= MAX_LOGIN_ATTEMPTS) {
+        await oauthStore.deleteLoginRequest(loginId);
+        logger.warn("Too many failed sign-in attempts, login request discarded");
+        return c.html(renderPage("<h1>Too many attempts</h1><p>Too many wrong passwords. Start the connection again from your MCP client.</p>"), 403);
+      }
+      await oauthStore.storeLoginRequest(loginId, { ...login, attempts });
+      logger.warn("Sign-in failed: wrong password");
+      return c.html(renderLoginForm(loginId, login.session.redirectUri, "Wrong password."), 401);
+    }
+
+    await oauthStore.deleteLoginRequest(loginId);
+    logger.info("Sign-in succeeded, redirecting to Google");
+    return redirectToGoogle(c, login.session);
+    }
+  );
+
+  async function redirectToGoogle(c: Context, session: OAuthSession) {
+    const internalState = crypto.randomUUID();
+    await oauthStore.storeSession(internalState, session);
 
     const googleAuthUrl = new URL(GOOGLE_AUTH_URL);
     googleAuthUrl.searchParams.append("response_type", "code");
@@ -269,8 +416,7 @@ export function createOAuthRouter(config: OAuthConfig) {
     googleAuthUrl.searchParams.append("prompt", "consent");
 
     return c.redirect(googleAuthUrl.toString());
-    }
-  );
+  }
 
   oauth.get("/callback", async (c) => {
     const code = c.req.query("code");

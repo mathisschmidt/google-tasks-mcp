@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "dev": "deno serve --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-sys --allow-ffi --port 3000 build/index.js",
+    "dev": "deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-sys --allow-ffi build/index.js",
     "lint": "deno lint"
   },
   "lint": {

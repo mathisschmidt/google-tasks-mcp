@@ -6,6 +6,7 @@ import { createOAuthRouter } from "../auth/oauth.ts";
 import { authenticateBearer } from "./middleware.ts";
 import { handleMcpGet, handleMcpPost } from "./mcp-endpoints.ts";
 import { createLogger } from "../utils/logger.ts";
+import { getPublicBaseUrl } from "../config.ts";
 
 const logger = createLogger({ component: "app" });
 
@@ -14,6 +15,7 @@ export interface ServerConfig {
     clientId: string;
     clientSecret: string;
     redirectUri: string;
+    authPassword?: string;
   };
 }
 
@@ -28,7 +30,7 @@ export function createApp(config: ServerConfig) {
   app.use("*", async (c, next) => {
     await next();
 
-    if (c.req.url.startsWith("https://")) {
+    if (getPublicBaseUrl(c.req.url).startsWith("https://")) {
       c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
 
@@ -80,8 +82,8 @@ export function createApp(config: ServerConfig) {
   app.route("/", createOAuthRouter(config.oauthConfig));
 
   app.get("/auth/callback", (c) => {
-    const url = new URL(c.req.url);
-    url.pathname = "/callback";
+    const url = new URL("/callback", getPublicBaseUrl(c.req.url));
+    url.search = new URL(c.req.url).search;
     return c.redirect(url.toString());
   });
 
@@ -89,7 +91,7 @@ export function createApp(config: ServerConfig) {
   app.post(MCP_ENDPOINT, authenticateBearer, handleMcpPost);
 
   app.get("/.well-known/oauth-authorization-server", (c) => {
-    const baseUrl = new URL(c.req.url).origin;
+    const baseUrl = getPublicBaseUrl(c.req.url);
     return c.json({
       issuer: baseUrl,
       authorization_endpoint: `${baseUrl}/authorize`,
